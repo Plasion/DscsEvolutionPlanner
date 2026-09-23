@@ -12,9 +12,15 @@ class Node(NamedTuple):
     point: int
     state: int
 
-def bfs_search(graph: dict[int, list[int]], state_mappings: dict[int, int], start: Node, end: int | None, end_state: int, forbidden_edges: set[tuple[Node, Node]], forbidden_nodes: set[Node]):
-    if start in forbidden_nodes or end is not None and Node(end, end_state) in forbidden_nodes:
+def bfs_search(graph: dict[int, list[int]], state_mappings: dict[int, int], start: Node, ends: list[int], end_state: int, forbidden_edges: set[tuple[Node, Node]], forbidden_nodes: set[Node]):
+    if start in forbidden_nodes:
         return None
+    if len(ends) > 0:
+        for end_point in ends:
+            if Node(end_point, end_state) not in forbidden_nodes:
+                break
+        else:
+            return None
 
     queue = deque([start])
     parent : dict[Node, Node | None] = {start: None}
@@ -23,7 +29,7 @@ def bfs_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
     
     while queue:
         u = queue.popleft()
-        if end is None and u.state == end_state or end is not None and u == (end, end_state):
+        if len(ends) > 0 and u.point in ends and u.state == end_state or len(ends) == 0 and u.state == end_state:
             end_node = u
             break
         for v_point in graph.get(u.point, []):
@@ -51,8 +57,8 @@ def bfs_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
     path.reverse()
     return path
 
-def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], start: int, end: int | None, end_state: int, k = 3) -> list[list[int]]:
-    if start == end:
+def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], start: int, ends: list[int], end_state: int, k = 3) -> list[list[int]]:
+    if start in ends and state_mappings[start] == end_state:
         return [[start]]
     
     # 候选路径堆
@@ -61,7 +67,7 @@ def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
     A: list[list[Node]] = []
     
     # 第一条最短路径
-    first_path = bfs_search(graph, state_mappings, Node(start, state_mappings[start]), end, end_state, set(), set())
+    first_path = bfs_search(graph, state_mappings, Node(start, state_mappings[start]), ends, end_state, set(), set())
     if first_path is None:
         return []
     A.append(first_path)
@@ -90,7 +96,7 @@ def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
                     forbidden_edges.add((spur_node, path[i+1])) # 只加一种顺序，BFS 那会检查另一种顺序
             
             # 在当前受限图上，找偏离点到终点的最短路径
-            spur_path = bfs_search(graph, state_mappings, spur_node, end, end_state, forbidden_edges, forbidden_nodes)
+            spur_path = bfs_search(graph, state_mappings, spur_node, ends, end_state, forbidden_edges, forbidden_nodes)
             
             if spur_path is not None:
                 # 拼接完整路径
@@ -191,7 +197,7 @@ def find_digimon(id_or_name: str):
         else:
             return None
 
-def gen_outputtext(evopath: list[int]):
+def generate_output_text(evopath: list[int]):
     result = ''
     lastid = -1
     for _id in evopath:
@@ -216,16 +222,17 @@ def parse_command(params: list[str]):
             return
         case [('-?' | '/?' | '-h' | '-help' | '--help'), *_] | [('?' | 'h' | 'help')]:
             print(inspect.cleandoc('''
-            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-k <需要的路径数量>] [-d <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
+            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-r] [-k <需要的路径数量>] [-d <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
             退出：-e | --exit
             
             选项：
-                -em 替代原终点数码兽，使之后给出的多只数码兽都可以作为终点。不能和-pm或-ps同时使用。
+                -em 替代原终点数码兽，使之后给出的多只数码兽都可以作为终点。
                 -a 替代原终点数码兽，使任意数码兽都可以作为终点。必须配合-pm或-ps使用。
+                -r 可选参数，翻转路径显示，可以用来达成多起点进化到一终点的效果。
                 -k 可选参数，需要求解前多少条最优路径。默认为3。
                 -d 可选参数，禁止之后给出的多个世代的数码兽参与路径计算。
                 -pm 可选参数，要求路径必须途径之后给出的多只数码兽之一。可多次使用以添加多个途经组。
-                -ps 可选参数，要求路径必须能够收集之后给出的所有继承技。
+                -ps 可选参数，要求路径必须能够收集之后给出的所有继承技。可以用2、II或ii来表示Ⅱ，其它同理。
             '''))
             return
         case [('-e' | '-exit' | '--exit'), *_] | [('e' | 'exit')]:
@@ -235,7 +242,6 @@ def parse_command(params: list[str]):
             print('错误：参数太少了。输入?、-h或--help查看用法。')
             return
         case [start_id_or_name, *others] if (start := find_digimon(start_id_or_name)) is not None:
-            end = None
             ends: list[int] = []
             match others:
                 case [('-em')]:
@@ -243,12 +249,8 @@ def parse_command(params: list[str]):
                     return
                 case ['-em', *others]:
                     for i in range(len(others)):
-                        if others[i] in {'-k', '-d', '-pm', '-ps'}:
+                        if others[i] in {'-r', '-k', '-d', '-pm', '-ps'}:
                             end_id_or_names, others = others[:i], others[i:]
-                            for j in range(len(others)):
-                                if others[i] in {'-pm', '-ps'}:
-                                    print('错误：-em不能和-pm或-ps一起使用。')
-                                    return
                             break
                     else:
                         end_id_or_names, others = others, []
@@ -267,7 +269,8 @@ def parse_command(params: list[str]):
                         return
                     # 下溢以处理可选选项
                 case [end_id_or_name, *others] if (end := find_digimon(end_id_or_name)) is not None:
-                    pass # 下溢以处理可选选项
+                    ends.append(end)
+                    # 下溢以处理可选选项
                 case _:
                     print(f'错误：找不到终点数码兽「{end_id_or_name}」。')
                     return
@@ -275,16 +278,17 @@ def parse_command(params: list[str]):
             print(f'错误：找不到起点数码兽「{start_id_or_name}」。')
             return
 
-    # 下溢至此
+    # 处理可选选项
     flags: list[list[str]] = []
     i = 0
     for j in range(len(others)):
-        if others[j] in {'-k', '-d', '-pm', '-ps'}:
+        if others[j] in {'-r', '-k', '-d', '-pm', '-ps'}:
             flags.append(others[i:j])
             i = j
     if len(others) > 0:
         flags.append(others[i:])
 
+    reverse = False
     k = 3
     used_graph = link_graph
     used_state_mappings = empty_state_mappings
@@ -297,6 +301,9 @@ def parse_command(params: list[str]):
             case [('-d' | '-pm' | '-ps') as flag_type]:
                 print(f'错误：{flag_type}需要至少一个参数。输入?、-h或--help查看用法。')
                 return
+            case ['-r', *_]:
+                reverse = True
+                # 下溢以继续处理其它选项
             case ['-k', k_str, *others]:
                 try:
                     k = int(k_str)
@@ -306,18 +313,18 @@ def parse_command(params: list[str]):
                 if k < 1:
                     print(f'错误：提供给-k的参数「{k}」太小了，应该至少为1。')
                     return
-                # 下溢以继续处理其它参数
+                # 下溢以继续处理其它选项
             case ['-d', *others]:
                 used_graph = link_graph.copy()
                 for gen_str in others:
                     gen = gen_matcher.match(gen_str, max_results=1)
                     if len(gen) > 0:
                         for _id in gen_mappings[gen[0][0]]:
-                            del used_graph[_id]
+                            del used_graph[_id] # 只删节点省事，剩下的有向边让 BFS 那处理
                     else:
                         print(f'错误：找不到世代「{gen_str}」。')
                         return
-                # 下溢以继续处理其它参数
+                # 下溢以继续处理其它选项
             case ['-pm', *others]:
                 if used_state_mappings is empty_state_mappings:
                     used_state_mappings = empty_state_mappings.copy()
@@ -328,7 +335,7 @@ def parse_command(params: list[str]):
                         return
                     used_state_mappings[tmp_pass] |= (1 << state_count)
                 state_count += 1
-                # 下溢以继续处理其它参数
+                # 下溢以继续处理其它选项
             case ['-ps', *others]:
                 if used_state_mappings is empty_state_mappings:
                     used_state_mappings = empty_state_mappings.copy()
@@ -341,36 +348,30 @@ def parse_command(params: list[str]):
                     else:
                         print(f'错误：找不到继承技「{skill_str}」。')
                         return
-                # 下溢以继续处理其它参数
-
-    # 处理 -em 给出的数码兽。由于使用状态来实现，和其它使用状态的选项一起使用会出 bug，可能终点不是在这些数码兽上。
-    if len(ends) > 0:
-        if used_state_mappings is empty_state_mappings:
-            used_state_mappings = empty_state_mappings.copy()
-        for _id in ends:
-            used_state_mappings[_id] |= (1 << state_count)
-        state_count += 1
+                # 下溢以继续处理其它选项
 
     end_state = (1 << state_count) - 1
-    results = yen_search(used_graph, used_state_mappings, start, end, end_state, k)
+    results = yen_search(used_graph, used_state_mappings, start, ends, end_state, k)
     if len(results) == 0:
         print('错误：找不到可用进化路线')
         return
     for i, result in enumerate(results, 1):
-        print(f'进化路线{i}：' + gen_outputtext(result))
+        if reverse:
+            result.reverse()
+        print(f'进化路线{i}：' + generate_output_text(result))
 
 def main():
     load_data()
     if len(sys.argv) > 1:
         params = sys.argv[1:]
-        runonce = True
+        run_once = True
     else:
-        runonce = False
+        run_once = False
     while True:
-        if not runonce:
+        if not run_once:
             params = input('>>>').split()
         parse_command(params)
-        if runonce:
+        if run_once:
             break
 
 if __name__ == '__main__':
