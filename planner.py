@@ -222,7 +222,7 @@ def parse_command(params: list[str]):
             return
         case [('-?' | '/?' | '-h' | '-help' | '--help'), *_] | [('?' | 'h' | 'help')]:
             print(inspect.cleandoc('''
-            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-r] [-k <需要的路径数量>] [-d <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
+            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-r] [-k <需要的路径数量>] [-d <要排除的数码兽id或名字> [更多数码兽...]] [-dg <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
             退出：-e | --exit
             
             选项：
@@ -230,7 +230,8 @@ def parse_command(params: list[str]):
                 -a 替代原终点数码兽，使任意数码兽都可以作为终点。必须配合-pm或-ps使用。
                 -r 可选参数，翻转路径显示，可以用来达成多起点进化到一终点的效果。
                 -k 可选参数，需要求解前多少条最优路径。默认为3。
-                -d 可选参数，禁止之后给出的多个世代的数码兽参与路径计算。
+                -d 可选参数，禁止之后给出的多只数码兽参与路径计算。
+                -dg 可选参数，禁止之后给出的多个世代的数码兽参与路径计算。
                 -pm 可选参数，要求路径必须途径之后给出的多只数码兽之一。可多次使用以添加多个途经组。
                 -ps 可选参数，要求路径必须能够收集之后给出的所有继承技。可以用2、II或ii来表示Ⅱ，其它同理。
             '''))
@@ -249,7 +250,7 @@ def parse_command(params: list[str]):
                     return
                 case ['-em', *others]:
                     for i in range(len(others)):
-                        if others[i] in {'-r', '-k', '-d', '-pm', '-ps'}:
+                        if others[i] in {'-r', '-k', '-d', '-dg', '-pm', '-ps'}:
                             end_id_or_names, others = others[:i], others[i:]
                             break
                     else:
@@ -282,7 +283,7 @@ def parse_command(params: list[str]):
     flags: list[list[str]] = []
     i = 0
     for j in range(len(others)):
-        if others[j] in {'-r', '-k', '-d', '-pm', '-ps'}:
+        if others[j] in {'-r', '-k', '-d', '-dg', '-pm', '-ps'}:
             flags.append(others[i:j])
             i = j
     if len(others) > 0:
@@ -315,7 +316,18 @@ def parse_command(params: list[str]):
                     return
                 # 下溢以继续处理其它选项
             case ['-d', *others]:
-                used_graph = link_graph.copy()
+                if used_graph is link_graph:
+                    used_graph = link_graph.copy()
+                for disabled_id_or_name in others:
+                    tmp_disabled = find_digimon(disabled_id_or_name)
+                    if tmp_disabled is None:
+                        print(f'错误：找不到要禁用的数码兽「{pass_id_or_name}」。')
+                        return
+                    del used_graph[tmp_disabled]  # 只删节点省事，剩下的有向边让 BFS 那处理
+                # 下溢以继续处理其它选项
+            case ['-dg', *others]:
+                if used_graph is link_graph:
+                    used_graph = link_graph.copy()
                 for gen_str in others:
                     gen = gen_matcher.match(gen_str, max_results=1)
                     if len(gen) > 0:
@@ -369,7 +381,7 @@ def main():
         run_once = False
     while True:
         if not run_once:
-            params = input('>>>').split()
+            params = input('>>> ').split()
         parse_command(params)
         if run_once:
             break
