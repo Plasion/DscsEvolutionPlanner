@@ -7,6 +7,8 @@ import re
 import sys
 from typing import Any, Callable, NamedTuple
 from mohu import MohuMatcher
+from mohu.pinyin import PinyinConverter
+from pypinyin import Style, pinyin
 
 class Node(NamedTuple):
     point: int
@@ -115,8 +117,53 @@ def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
         next_path = heapq.heappop(candidates)
         A.append(next_path)
 
-    # 后处理：把 Node 解包成 point
     return [[node.point for node in path] for path in A]
+
+# 优化模糊匹配
+class MyPinyinConverter(PinyinConverter):
+    def __init__(self): # 不解析成完整拼音而是分成声母和韵母，然后才能启用 pinyin_confusion 和 char_confusion
+        self.pinyin_syllables = {
+            'a', 'o', 'e', 'i', 'u', 'v', 'ai', 'ei', 'ui', 'ao', 'ou', 'iu', 'an', 'en', 'in', 'un', 'vn', 'ang', 'eng', 'ing', 'ong',
+            'er', 'ia', 'ie', 'ua', 'uo', 'ue', 've', 'iao', 'iou', 'uai', 'uei', 'ian', 'uan', 'van', 'uen', 'iang', 'uang', 'ueng', 'iong'
+            'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'j', 'q', 'x', 'zh', 'ch', 'sh', 'r', 'z', 'c', 's'
+        }
+        self.sorted_syllables = sorted(self.pinyin_syllables, key=len, reverse=True)
+
+    def convert(self, word: str, ignore_tones: bool = False) -> list[str]: # 统一拆分成声母和韵母，英文字母和特殊字符保留
+        pinyin_list_of_lists = pinyin(word, Style.NORMAL, errors='default')
+        def split():
+            for pinyin_list in pinyin_list_of_lists:
+                letter_or_pinyin = pinyin_list[0]
+                if len(letter_or_pinyin) <= 1:
+                    yield letter_or_pinyin
+                else:
+                    for tmp in self._split_pinyin_string(letter_or_pinyin):
+                        yield tmp
+        return [tmp for tmp in split()]
+
+class MyMatcher(MohuMatcher):
+    def __init__(self,
+                 pinyin_confusion_path: str = 'pinyin_confusion.json',
+                 char_confusion_path: str = 'char_confusion.json',
+                 similarity_threshold: float = 0.7, # 不生效
+                 max_distance: int = 3,
+                 ignore_tones: bool = True,
+                 hybrid_weights: dict[str, float] = {} # 不生效
+                 ):
+        super().__init__(pinyin_confusion_path, char_confusion_path, similarity_threshold, max_distance, ignore_tones, hybrid_weights)
+        self.pinyin_converter = MyPinyinConverter()
+
+    def _match_hybrid(self, text: str) -> list[tuple[str, float]]: # 把默认实现的 60% 字符相似度 + 40% 拼音相似度改为取最高相似度
+        char_results = self._match_char(text)
+        pinyin_results = self._match_pinyin(text)
+        combined_scores: dict[str, float] = {}
+        for word, score in char_results:
+            combined_scores[word] = max(combined_scores.get(word, 0.0), score)
+        for word, score in pinyin_results:
+            combined_scores[word] = max(combined_scores.get(word, 0.0), score)
+        final_results = [(word, score) for word, score in combined_scores.items()]
+        final_results.sort(key=lambda x: x[1], reverse=True)
+        return final_results
 
 data_list: dict[int, dict[str, Any]]
 name_mappings: dict[str, int]
@@ -124,9 +171,9 @@ link_graph: dict[int, list[int]]
 empty_state_mappings: dict[int, int]
 gen_mappings: dict[str, list[int]]
 skill_mappings: dict[str, list[int]]
-name_matcher = MohuMatcher(similarity_threshold=0.6)
-gen_matcher = MohuMatcher(similarity_threshold=0.6)
-skill_matcher = MohuMatcher(similarity_threshold=0.6)
+name_matcher = MyMatcher()
+gen_matcher = MyMatcher()
+skill_matcher = MyMatcher()
 skill_translate: Callable[[str], str]
 
 def load_data():
@@ -191,7 +238,7 @@ def find_digimon(id_or_name: str):
         else:
             return None
     except ValueError:
-        name = name_matcher.match(id_or_name, max_results=1)
+        name = name_matcher.match(id_or_name, similarity_threshold=0.6)
         if len(name) > 0:
             return name_mappings[name[0][0]]
         else:
@@ -329,7 +376,7 @@ def parse_command(params: list[str]):
                 if used_graph is link_graph:
                     used_graph = link_graph.copy()
                 for gen_str in others:
-                    gen = gen_matcher.match(gen_str, max_results=1)
+                    gen = gen_matcher.match(gen_str, similarity_threshold=0.6)
                     if len(gen) > 0:
                         for _id in gen_mappings[gen[0][0]]:
                             del used_graph[_id] # 只删节点省事，剩下的有向边让 BFS 那处理
@@ -352,7 +399,7 @@ def parse_command(params: list[str]):
                 if used_state_mappings is empty_state_mappings:
                     used_state_mappings = empty_state_mappings.copy()
                 for skill_str in others:
-                    skill = skill_matcher.match(skill_translate(skill_str), max_results=1)
+                    skill = skill_matcher.match(skill_translate(skill_str), similarity_threshold=0.4)
                     if len(skill) > 0:
                         for _id in skill_mappings[skill[0][0]]:
                             used_state_mappings[_id] |= (1 << state_count)
