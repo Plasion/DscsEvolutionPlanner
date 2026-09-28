@@ -3,9 +3,8 @@ from collections import deque
 import csv
 import heapq
 import inspect
-import re
 import sys
-from typing import Any, Callable, NamedTuple
+from typing import Any, NamedTuple
 from mohu import MohuMatcher
 from mohu.pinyin import PinyinConverter
 from pypinyin import Style, pinyin
@@ -121,16 +120,17 @@ def yen_search(graph: dict[int, list[int]], state_mappings: dict[int, int], star
 
 # 优化模糊匹配
 class MyPinyinConverter(PinyinConverter):
-    def __init__(self): # 不解析成完整拼音而是分成声母和韵母，然后才能启用 pinyin_confusion 和 char_confusion
+    def __init__(self): # 不解析成完整拼音而是分成声母和韵母，然后才能启用 char_similarity_override 和 pinyin_similarity_override
         self.pinyin_syllables = {
             'a', 'o', 'e', 'i', 'u', 'v', 'ai', 'ei', 'ui', 'ao', 'ou', 'iu', 'an', 'en', 'in', 'un', 'vn', 'ang', 'eng', 'ing', 'ong',
-            'er', 'ia', 'ie', 'ua', 'uo', 'ue', 've', 'iao', 'iou', 'uai', 'uei', 'ian', 'uan', 'van', 'uen', 'iang', 'uang', 'ueng', 'iong'
-            'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'j', 'q', 'x', 'zh', 'ch', 'sh', 'r', 'z', 'c', 's'
+            'er', 'ia', 'ie', 'ua', 'uo', 'ue', 've', 'iao', 'iou', 'uai', 'uei', 'ian', 'uan', 'van', 'uen', 'iang', 'uang', 'ueng', 'iong',
+            'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'j', 'q', 'x', 'zh', 'ch', 'sh', 'r', 'z', 'c', 's',
+            'II', 'III', 'ii', 'iii' # 适配带等级的技能名称（如力量能源Ⅲ），使 III 之类的易输入形式能进行相似度覆写
         }
         self.sorted_syllables = sorted(self.pinyin_syllables, key=len, reverse=True)
 
-    def convert(self, word: str, ignore_tones: bool = False) -> list[str]: # 统一拆分成声母和韵母，英文字母和特殊字符保留
-        pinyin_list_of_lists = pinyin(word, Style.NORMAL, errors='default')
+    def convert(self, word: str, ignore_tones: bool = False) -> list[str]: # 统一拆分成声母和韵母
+        pinyin_list_of_lists = pinyin(word, Style.NORMAL, errors='default') # 这么实现可能造成英文字母粘连影响编辑距离判定，但反正几乎没有英文，无所谓
         def split():
             for pinyin_list in pinyin_list_of_lists:
                 letter_or_pinyin = pinyin_list[0]
@@ -143,8 +143,8 @@ class MyPinyinConverter(PinyinConverter):
 
 class MyMatcher(MohuMatcher):
     def __init__(self,
-                 pinyin_confusion_path: str = 'pinyin_confusion.json',
-                 char_confusion_path: str = 'char_confusion.json',
+                 pinyin_confusion_path: str = 'pinyin_similarity_override.json',
+                 char_confusion_path: str = 'char_similarity_override.json',
                  similarity_threshold: float = 0.7, # 不生效
                  max_distance: int = 3,
                  ignore_tones: bool = True,
@@ -174,25 +174,20 @@ skill_mappings: dict[str, list[int]]
 name_matcher = MyMatcher()
 gen_matcher = MyMatcher()
 skill_matcher = MyMatcher()
-skill_translate: Callable[[str], str]
 
 def load_data():
     tmp_list: dict[str, dict[str, Any]] = {}
     with open('data.csv', mode='r', encoding='utf-8') as file:
         for row in csv.DictReader(file):
-            tmp_item = {'编号': int(row['编号']), '名字': row['名字'], '别名': row['别名'] if row['别名'] != '' else None, '世代': row['世代'], '退化': ast.literal_eval(row['退化']), '进化': ast.literal_eval(row['进化']), '继承技': ast.literal_eval(row['继承技'])}
+            tmp_item = {'编号': int(row['编号']), '名字': row['名字'], '别名': row['别名'] if row['别名'] else None, '世代': row['世代'], '退化': ast.literal_eval(row['退化']), '进化': ast.literal_eval(row['进化']), '继承技': ast.literal_eval(row['继承技'])}
             tmp_list[tmp_item['名字']] = tmp_item
-    for tmp_item in tmp_list.values():
+    for tmp_item in tmp_list.values(): # 把进退化列表从记录名字变成记录id  可能在这里产生异常
         for i in range(len(tmp_item['退化'])):
             tmp_item['退化'][i] = tmp_list[tmp_item['退化'][i]]['编号']
         for i in range(len(tmp_item['进化'])):
             tmp_item['进化'][i] = tmp_list[tmp_item['进化'][i]]['编号']
 
-        mapping = str.maketrans('ⅠⅡⅢ', '123')
-        for i in range(len(tmp_item['继承技'])):
-            tmp_item['继承技'][i] = tmp_item['继承技'][i].translate(mapping)
-
-    global data_list, name_mappings, link_graph, empty_state_mappings, gen_mappings, skill_mappings, skill_translate
+    global data_list, name_mappings, link_graph, empty_state_mappings, gen_mappings, skill_mappings
 
     data_list = {item['编号']: item for item in tmp_list.values()}
     empty_state_mappings = {item['编号']: 0 for item in tmp_list.values()}
@@ -226,10 +221,6 @@ def load_data():
     gen_matcher.build(list(gen_mappings.keys()))
     skill_matcher.build(list(skill_mappings.keys()))
 
-    mapping = {'Ⅰ': '1', 'Ⅱ': '2', 'Ⅲ': '3', 'I': '1', 'II': '2', 'III': '3', 'i': '1', 'ii': '2', 'iii': '3'}
-    pattern = re.compile("|".join(map(re.escape, mapping)))
-    skill_translate = lambda skill_name: pattern.sub(lambda m: mapping[m.group(0)], skill_name)
-
 def find_digimon(id_or_name: str):
     try:
         _id = int(id_or_name)
@@ -244,22 +235,42 @@ def find_digimon(id_or_name: str):
         else:
             return None
 
-def generate_output_text(evopath: list[int]):
+def generate_output_text(evopath: list[int], prefer_alias: bool, display_skills: set[str]):
     result = ''
     lastid = -1
     for _id in evopath:
+        dataitem = data_list[_id]
+
         if lastid != -1:
-            dataitem = data_list[_id]
             lastdataitem = data_list[lastid]
             if _id in lastdataitem['进化'] and lastid in dataitem['进化']: # 模式转换
-                result += '⮂ '
+                result += '⮂ ' # 空格是为了适配 Windows 终端配默认字体时的显示，以下同理
             elif _id in lastdataitem['进化'] and lastid in dataitem['退化']: # 进化
                 result += '↗ '
             elif _id in lastdataitem['退化'] and lastid in dataitem['进化']: # 退化
                 result += '↘ '
             else: # 映射错误回落
                 result += '→ '
-        result += f'[{_id}]{data_list[_id]['名字']}'
+        
+        if prefer_alias and dataitem['别名']:
+            result += f'[{_id}]{dataitem['别名']}'
+        else:
+            result += f'[{_id}]{dataitem['名字']}'
+        
+        def find_skill():
+            skills_count = len(dataitem['继承技'])
+            for index, skill_str in enumerate(dataitem['继承技'], 1):
+                skill = skill_str.split('.')
+                if skill[1] in display_skills:
+                    if skill[0] == 'Lv':
+                        skill[0] = f'[{index}/{skills_count}]' # 继承技获得等级未填写时，替换为显示这是第几个继承技
+                    if skill[1].endswith(('Ⅰ', 'Ⅱ', 'Ⅲ')):
+                        skill[1] += ' ' # 空格是为了适配 Windows 终端配默认字体时的显示
+                    yield f'{skill[0]} {skill[1]}'
+        skills_str = '、'.join(find_skill())
+        if skills_str:
+            result += f'<{skills_str}>'
+        
         lastid = _id
     return result
 
@@ -269,18 +280,19 @@ def parse_command(params: list[str]):
             return
         case [('-?' | '/?' | '-h' | '-help' | '--help'), *_] | [('?' | 'h' | 'help')]:
             print(inspect.cleandoc('''
-            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-r] [-k <需要的路径数量>] [-d <要排除的数码兽id或名字> [更多数码兽...]] [-dg <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
+            用法：<起点数码兽id或名字> <<终点数码兽id或名字> | -em <终点数码兽id或名字> [更多数码兽...] | -a> [-pa] [-r] [-k <需要的路径数量>] [-d <要排除的数码兽id或名字> [更多数码兽...]] [-dg <要排除的世代> [更多世代...]] [<-pm <途径数码兽id或名字>  [更多数码兽...]> [更多途经组...]] [-ps <途径数码兽需要具有的继承技> [更多继承技...]]
             退出：-e | --exit
             
             选项：
                 -em 替代原终点数码兽，使之后给出的多只数码兽都可以作为终点。
                 -a 替代原终点数码兽，使任意数码兽都可以作为终点。必须配合-pm或-ps使用。
+                -pa 可选参数，显示数码兽名字时优先使用别名。
                 -r 可选参数，翻转路径显示，可以用来达成多起点进化到一终点的效果。
                 -k 可选参数，需要求解前多少条最优路径。默认为3。
                 -d 可选参数，禁止之后给出的多只数码兽参与路径计算。
                 -dg 可选参数，禁止之后给出的多个世代的数码兽参与路径计算。
                 -pm 可选参数，要求路径必须途径之后给出的多只数码兽之一。可多次使用以添加多个途经组。
-                -ps 可选参数，要求路径必须能够收集之后给出的所有继承技。可以用2、II或ii来表示Ⅱ，其它同理。
+                -ps 可选参数，要求路径必须能够收集之后给出的所有继承技。可以用2、II或ii来表示Ⅱ，Ⅰ和Ⅲ同理。
             '''))
             return
         case [('-e' | '-exit' | '--exit'), *_] | [('e' | 'exit')]:
@@ -297,7 +309,7 @@ def parse_command(params: list[str]):
                     return
                 case ['-em', *others]:
                     for i in range(len(others)):
-                        if others[i] in {'-r', '-k', '-d', '-dg', '-pm', '-ps'}:
+                        if others[i] in {'-pa', '-r', '-k', '-d', '-dg', '-pm', '-ps'}:
                             end_id_or_names, others = others[:i], others[i:]
                             break
                     else:
@@ -330,17 +342,19 @@ def parse_command(params: list[str]):
     flags: list[list[str]] = []
     i = 0
     for j in range(len(others)):
-        if others[j] in {'-r', '-k', '-d', '-dg', '-pm', '-ps'}:
+        if others[j] in {'-pa', '-r', '-k', '-d', '-dg', '-pm', '-ps'}:
             flags.append(others[i:j])
             i = j
     if len(others) > 0:
         flags.append(others[i:])
 
+    prefer_alias = False
     reverse = False
     k = 3
     used_graph = link_graph
     used_state_mappings = empty_state_mappings
     state_count = 0
+    display_skills: set[str] = set()
     for flag in flags:
         match flag:
             case ['-k']:
@@ -349,6 +363,8 @@ def parse_command(params: list[str]):
             case [('-d' | '-pm' | '-ps') as flag_type]:
                 print(f'错误：{flag_type}需要至少一个参数。输入?、-h或--help查看用法。')
                 return
+            case ['-pa']:
+                prefer_alias = True
             case ['-r', *_]:
                 reverse = True
                 # 下溢以继续处理其它选项
@@ -399,11 +415,12 @@ def parse_command(params: list[str]):
                 if used_state_mappings is empty_state_mappings:
                     used_state_mappings = empty_state_mappings.copy()
                 for skill_str in others:
-                    skill = skill_matcher.match(skill_translate(skill_str), similarity_threshold=0.4)
+                    skill = skill_matcher.match(skill_str, similarity_threshold=0.4)
                     if len(skill) > 0:
                         for _id in skill_mappings[skill[0][0]]:
                             used_state_mappings[_id] |= (1 << state_count)
                         state_count += 1
+                        display_skills.add(skill[0][0])
                     else:
                         print(f'错误：找不到继承技「{skill_str}」。')
                         return
@@ -417,7 +434,7 @@ def parse_command(params: list[str]):
     for i, result in enumerate(results, 1):
         if reverse:
             result.reverse()
-        print(f'进化路线{i}：' + generate_output_text(result))
+        print(f'进化路线{i}：' + generate_output_text(result, prefer_alias, display_skills))
 
 def main():
     load_data()
